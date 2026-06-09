@@ -200,7 +200,15 @@ public enum XMetadata {
         // Build the canonical URL
         let handle = oembed?.authorHandle ?? handleFromUrl ?? ""
         let postUrl = oembed?.url ?? "https://x.com/\(handle)/status/\(postId)"
-        
+
+        // Author identity from the syndication user dict (richer than oembed)
+        let user = syndication?.user
+        let authorId = user?["id_str"] as? String
+        let authorVerified = (user?["is_blue_verified"] as? Bool)
+            ?? (user?["verified"] as? Bool)
+            ?? false
+        let authorProfileImageUrl = user?["profile_image_url_https"] as? String
+
         return PostMetadata(
             id: postId,
             url: postUrl,
@@ -215,7 +223,12 @@ public enum XMetadata {
             mentions: mentions,
             urls: urls,
             video: videoInfo,
-            photos: photos
+            photos: photos,
+            authorId: authorId,
+            authorVerified: authorVerified,
+            authorProfileImageUrl: authorProfileImageUrl,
+            replyCount: syndication?.replyCount,
+            viewCount: syndication?.viewCount
         )
     }
     
@@ -299,8 +312,11 @@ public enum XMetadata {
         let text: String
         let language: String?
         let favoriteCount: Int?
+        let replyCount: Int?
+        let viewCount: Int?
         let createdAt: String?
         let entities: [String: Any]?
+        let user: [String: Any]?
         let hasVideo: Bool
         let mediaDetails: [[String: Any]]?
     }
@@ -312,29 +328,33 @@ public enum XMetadata {
     /// data (hashtags, mentions, URLs), and media details including video variants with direct
     /// MP4 download URLs and photo URLs with dimensions.
     ///
-    /// No authentication is required. A dummy `token=0` parameter is appended as expected
-    /// by the endpoint.
+    /// No authentication is required. A request-specific `token` is derived from the post ID
+    /// (the same algorithm X's web client uses) and the `Googlebot` User-Agent is sent, both
+    /// of which yield fuller, less-frequently-blocked responses than a dummy `token=0`.
     ///
     /// - Parameter postId: The numeric post/tweet ID.
     /// - Throws: ``XMetadataError`` on network failure, rate limiting, or if the post is not found.
     /// - Returns: A ``SyndicationResponse`` containing the post text, engagement data, entities, and media details.
     private static func fetchSyndication(postId: String) async throws -> SyndicationResponse {
-        guard let url = URL(string: "https://cdn.syndication.twimg.com/tweet-result?id=\(postId)&token=0") else {
+        let token = generateSyndicationToken(postId)
+        guard let url = URL(string: "https://cdn.syndication.twimg.com/tweet-result?id=\(postId)&token=\(token)") else {
             throw XMetadataError.parsingError("Invalid syndication URL")
         }
-        
-        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
-        
+
+        var request = URLRequest(url: url)
+        request.setValue("Googlebot", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: request)
+
         if let httpResponse = response as? HTTPURLResponse {
             if httpResponse.statusCode == 404 { throw XMetadataError.postNotFound }
             if httpResponse.statusCode == 429 { throw XMetadataError.rateLimited }
             if httpResponse.statusCode != 200 { throw XMetadataError.networkError("syndication HTTP \(httpResponse.statusCode)") }
         }
-        
+
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw XMetadataError.parsingError("Invalid syndication JSON")
         }
-        
+
         // Locate media entities — prefer top-level mediaDetails, fall back to entities.media
         let entities = json["entities"] as? [String: Any]
         let mediaEntities = json["mediaDetails"] as? [[String: Any]]
@@ -342,16 +362,74 @@ public enum XMetadata {
         let hasVideo = mediaEntities?.contains(where: {
             ($0["type"] as? String) == "video" || ($0["type"] as? String) == "animated_gif"
         }) ?? false
-        
+
+        // View count lives on the top-level `video` dict and may be an Int or a String
+        let videoDict = json["video"] as? [String: Any]
+        let viewCount: Int? = {
+            if let v = videoDict?["viewCount"] as? Int { return v }
+            if let s = videoDict?["viewCount"] as? String { return Int(s) }
+            return nil
+        }()
+
         return SyndicationResponse(
             text: json["text"] as? String ?? "",
             language: json["lang"] as? String,
             favoriteCount: json["favorite_count"] as? Int,
+            replyCount: json["conversation_count"] as? Int,
+            viewCount: viewCount,
             createdAt: json["created_at"] as? String,
             entities: entities,
+            user: json["user"] as? [String: Any],
             hasVideo: hasVideo,
             mediaDetails: mediaEntities
         )
+    }
+
+    /// Derives the syndication request token from a post ID.
+    ///
+    /// Ports X's web-client algorithm:
+    /// `((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '')`.
+    /// The endpoint tolerates `token=0`, but the derived token matches what the
+    /// official embed uses and is less likely to be rate-limited or blocked.
+    ///
+    /// - Parameter postId: The numeric post/tweet ID.
+    /// - Returns: The base-36 token string with dots and zeros removed.
+    static func generateSyndicationToken(_ postId: String) -> String {
+        let digits = Array("0123456789abcdefghijklmnopqrstuvwxyz")
+        var value = ((Double(postId) ?? 0) / 1e15) * Double.pi
+        var result = ""
+
+        // Integer part
+        let intPart = Int(value)
+        value -= Double(intPart)
+        if intPart == 0 {
+            result = "0"
+        } else {
+            var n = intPart
+            var s = ""
+            while n > 0 {
+                s = String(digits[n % 36]) + s
+                n /= 36
+            }
+            result = s
+        }
+
+        // Fractional part
+        if value > 0 {
+            result += "."
+            for _ in 0..<12 {
+                value *= 36
+                let digit = Int(value)
+                result += String(digits[digit])
+                value -= Double(digit)
+                if value == 0 { break }
+            }
+        }
+
+        // Remove dots and zeros, matching the JS .replace(/(0+|\.)/g, '')
+        return result
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: "0", with: "")
     }
     
     // MARK: - Video Config Endpoint

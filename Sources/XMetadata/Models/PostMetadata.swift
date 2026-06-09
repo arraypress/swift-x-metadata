@@ -38,11 +38,30 @@ public struct PostMetadata: Sendable {
     /// The author's profile URL.
     public let authorUrl: String
 
+    /// The author's numeric user ID, when available from syndication.
+    public let authorId: String?
+
+    /// Whether the author is verified (blue check or legacy verified).
+    public let authorVerified: Bool
+
+    /// The author's profile image URL (HTTPS), when available from syndication.
+    public let authorProfileImageUrl: String?
+
     /// The language code of the post (e.g., `"en"`).
     public let language: String?
 
     /// Number of likes/favorites.
     public let likeCount: Int?
+
+    /// Number of replies (X's conversation count), when available.
+    public let replyCount: Int?
+
+    /// View count as a raw integer, when available from syndication.
+    ///
+    /// Complements ``VideoInfo/viewCount`` — a pre-formatted string from the
+    /// video config endpoint — with a raw integer when X's syndication
+    /// response provides one.
+    public let viewCount: Int?
 
     /// When the post was created.
     public let createdAt: Date?
@@ -63,6 +82,53 @@ public struct PostMetadata: Sendable {
     ///
     /// Empty if the post has no images, or only has video.
     public let photos: [PhotoInfo]
+
+    /// Creates post metadata.
+    ///
+    /// The author identity, reply count, and integer view count are sourced
+    /// from X's syndication response and default to empty when unavailable, so
+    /// existing call sites need not provide them.
+    public init(
+        id: String,
+        url: String,
+        text: String,
+        author: String,
+        authorHandle: String,
+        authorUrl: String,
+        language: String?,
+        likeCount: Int?,
+        createdAt: Date?,
+        hashtags: [String],
+        mentions: [String],
+        urls: [String],
+        video: VideoInfo?,
+        photos: [PhotoInfo],
+        authorId: String? = nil,
+        authorVerified: Bool = false,
+        authorProfileImageUrl: String? = nil,
+        replyCount: Int? = nil,
+        viewCount: Int? = nil
+    ) {
+        self.id = id
+        self.url = url
+        self.text = text
+        self.author = author
+        self.authorHandle = authorHandle
+        self.authorUrl = authorUrl
+        self.authorId = authorId
+        self.authorVerified = authorVerified
+        self.authorProfileImageUrl = authorProfileImageUrl
+        self.language = language
+        self.likeCount = likeCount
+        self.replyCount = replyCount
+        self.viewCount = viewCount
+        self.createdAt = createdAt
+        self.hashtags = hashtags
+        self.mentions = mentions
+        self.urls = urls
+        self.video = video
+        self.photos = photos
+    }
 
     /// The like count formatted with locale-appropriate grouping separators.
     ///

@@ -149,6 +149,53 @@ final class XMetadataTests: XCTestCase {
         XCTAssertNil(post.formattedDate)
     }
 
+    // MARK: - Syndication Token
+
+    func testSyndicationTokenStripsDotsAndZeros() {
+        let token = XMetadata.generateSyndicationToken("1100414780655906816")
+        XCTAssertFalse(token.isEmpty)
+        XCTAssertFalse(token.contains("."), "Token must not contain dots")
+        XCTAssertFalse(token.contains("0"), "Token must not contain zeros")
+    }
+
+    func testSyndicationTokenIsDeterministic() {
+        XCTAssertEqual(
+            XMetadata.generateSyndicationToken("1234567890"),
+            XMetadata.generateSyndicationToken("1234567890")
+        )
+    }
+
+    // MARK: - PostMetadata Author Fields
+
+    func testAuthorFieldsDefaultWhenOmitted() {
+        let post = PostMetadata(
+            id: "1", url: "", text: "", author: "", authorHandle: "",
+            authorUrl: "", language: nil, likeCount: nil, createdAt: nil,
+            hashtags: [], mentions: [], urls: [], video: nil, photos: []
+        )
+        XCTAssertNil(post.authorId)
+        XCTAssertFalse(post.authorVerified)
+        XCTAssertNil(post.authorProfileImageUrl)
+        XCTAssertNil(post.replyCount)
+        XCTAssertNil(post.viewCount)
+    }
+
+    func testAuthorFieldsPopulated() {
+        let post = PostMetadata(
+            id: "1", url: "", text: "", author: "", authorHandle: "",
+            authorUrl: "", language: nil, likeCount: nil, createdAt: nil,
+            hashtags: [], mentions: [], urls: [], video: nil, photos: [],
+            authorId: "44196397", authorVerified: true,
+            authorProfileImageUrl: "https://pbs.twimg.com/x.jpg",
+            replyCount: 128, viewCount: 91100
+        )
+        XCTAssertEqual(post.authorId, "44196397")
+        XCTAssertTrue(post.authorVerified)
+        XCTAssertEqual(post.authorProfileImageUrl, "https://pbs.twimg.com/x.jpg")
+        XCTAssertEqual(post.replyCount, 128)
+        XCTAssertEqual(post.viewCount, 91100)
+    }
+
     // MARK: - Error Descriptions
 
     func testAllErrorsHaveDescriptions() {
@@ -225,4 +272,5 @@ final class XMetadataTests: XCTestCase {
         XCTAssertEqual(post.id, "1100414780655906816")
         XCTAssertFalse(post.text.isEmpty)
     }
+    
 }
