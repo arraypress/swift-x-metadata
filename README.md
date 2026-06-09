@@ -1,18 +1,20 @@
 # Swift X Metadata
 
-A Swift library for fetching metadata from X (formerly Twitter) posts. No API key, developer account, or authentication required — uses X's public endpoints.
+A dependency-free Swift library for fetching metadata from X (formerly Twitter) posts without authentication. XMetadata aggregates three public X endpoints — oembed, syndication, and video config — into a single unified `PostMetadata` struct. No API key, developer account, or login is required.
 
 ## Features
 
-- 🎯 **Simple API** — fetch post metadata with a single async call
-- 📊 **Rich metadata** — text, author, likes, date, language, hashtags, mentions, URLs
-- 🎬 **Video info** — duration, view count, HLS playback URL, direct MP4 download URLs
-- 🖼️ **Photo support** — direct image URLs with dimensions for photo posts
-- 🔒 **No API key required** — uses public oembed, syndication, and guest token endpoints
-- 🍎 **Cross-platform** — macOS, iOS, tvOS, watchOS
-- ⚡ **Async/await** native — built for modern Swift concurrency
-- 🛡️ **Typed error handling** — specific errors for every failure case
-- 🔗 **Flexible input** — supports `x.com`, `twitter.com`, and raw post IDs
+- 🔓 **No authentication** — works against public X endpoints with no API key or developer account
+- 🧩 **Unified metadata** — one `XMetadata.fetch(_:)` call merges oembed, syndication, and video config into a single `PostMetadata`
+- 🔗 **Flexible input** — accepts `x.com` and legacy `twitter.com` URLs, URLs with tracking params (stripped automatically), and raw numeric post IDs
+- 📝 **Rich post data** — full text, language, like count, creation date, hashtags, mentions, and expanded URLs
+- 👤 **Author identity** — display name, handle, profile URL, plus `authorId`, `authorVerified`, and `authorProfileImageUrl` from the syndication response
+- 📊 **Engagement metrics** — `likeCount`, `replyCount`, and an integer `viewCount` surfaced alongside the video config's formatted view string
+- 🎬 **Video downloads** — `VideoInfo` exposes duration, HLS playback URL, and MP4 variants, with `bestMp4Url` for the highest-bitrate direct download
+- 🖼️ **Photo metadata** — every attached image with its direct URL and pixel dimensions
+- ⚡ **Parallel fetching** — oembed and syndication are requested concurrently; the video config endpoint is only hit for posts that contain video
+- 🛡️ **Typed errors** — `XMetadataError` distinguishes invalid URLs, missing posts, rate limiting, network, and parsing failures
+- 📦 **Sendable models** — all public types are `Sendable` and safe across concurrency domains
 
 ## Requirements
 
@@ -24,22 +26,17 @@ A Swift library for fetching metadata from X (formerly Twitter) posts. No API ke
 
 ### Swift Package Manager
 
-Add the following to your `Package.swift`:
-
 ```swift
 dependencies: [
     .package(url: "https://github.com/arraypress/swift-x-metadata.git", from: "1.0.0")
 ]
 ```
 
-Or in Xcode:
-1. File → Add Package Dependencies
-2. Enter the repository URL
-3. Choose version requirements
+Or in Xcode: **File → Add Package Dependencies…** and enter `https://github.com/arraypress/swift-x-metadata`.
 
 ## Usage
 
-### Fetch Post Metadata
+### Fetching post metadata
 
 ```swift
 import XMetadata
@@ -49,165 +46,127 @@ let post = try await XMetadata.fetch("https://x.com/ladbible/status/110041478065
 print(post.text)
 print("\(post.author) (@\(post.authorHandle))")
 print("Likes: \(post.formattedLikeCount ?? "N/A")")
-print("Date: \(post.formattedDate ?? "N/A")")
-print("Language: \(post.language ?? "N/A")")
+print("Posted: \(post.formattedDate ?? "N/A")")
 ```
 
-### Video Info
+### Author identity and engagement
 
 ```swift
+import XMetadata
+
+let post = try await XMetadata.fetch("1100414780655906816") // raw post ID
+
+if post.authorVerified { print("Verified account") }
+print("Author ID: \(post.authorId ?? "N/A")")
+print("Avatar: \(post.authorProfileImageUrl ?? "N/A")")
+print("Replies: \(post.replyCount ?? 0)")
+print("Views: \(post.viewCount ?? 0)")
+```
+
+### Video downloads
+
+```swift
+import XMetadata
+
 let post = try await XMetadata.fetch("https://x.com/user/status/123")
 
 if let video = post.video {
     print("Duration: \(video.formattedDuration)")
     print("Views: \(video.viewCount ?? "N/A")")
-    print("HLS URL: \(video.playbackUrl)")
-    print("Loops: \(video.shouldLoop)")
 
-    // Direct MP4 download (best quality) — use this for downloading/transcribing
-    if let mp4Url = video.bestMp4Url {
-        print("Download: \(mp4Url)")
-    }
-
-    // All available variants
-    for variant in video.variants {
-        print("\(variant.contentType) — \(variant.bitrate ?? 0)bps — \(variant.url)")
+    if let mp4 = video.bestMp4Url {
+        print("Download: \(mp4)")
     }
 }
 ```
 
-### Photos
+### Photos and entities
 
 ```swift
+import XMetadata
+
 let post = try await XMetadata.fetch("https://x.com/user/status/123")
 
 for photo in post.photos {
     print("\(photo.url) (\(photo.width)x\(photo.height))")
 }
+
+print(post.hashtags)
+print(post.mentions)
+print(post.urls)
 ```
 
-### Post Entities
+### Error handling
 
 ```swift
-let post = try await XMetadata.fetch("https://x.com/user/status/123")
+import XMetadata
 
-print("Hashtags: \(post.hashtags)")    // ["swift", "ios"]
-print("Mentions: \(post.mentions)")    // ["apple", "xcode"]
-print("URLs: \(post.urls)")            // ["https://example.com"]
-```
-
-### URL Formats
-
-All common X/Twitter URL formats are supported:
-
-```swift
-// x.com
-let post = try await XMetadata.fetch("https://x.com/user/status/123")
-
-// twitter.com (legacy)
-let post = try await XMetadata.fetch("https://twitter.com/user/status/123")
-
-// With tracking parameters (stripped automatically)
-let post = try await XMetadata.fetch("https://x.com/user/status/123?s=46&t=abc123")
-
-// Raw post ID
-let post = try await XMetadata.fetch("1100414780655906816")
-```
-
-### Error Handling
-
-```swift
 do {
-    let post = try await XMetadata.fetch(url)
-    print(post.text)
+    let post = try await XMetadata.fetch(input)
+} catch XMetadataError.invalidPostId {
+    print("Not a valid X/Twitter URL or post ID")
 } catch XMetadataError.postNotFound {
     print("Post doesn't exist or was deleted")
 } catch XMetadataError.rateLimited {
-    print("Too many requests — try again later")
-} catch XMetadataError.invalidPostId {
-    print("Couldn't extract a post ID from the URL")
+    print("Rate limited — try again later")
 } catch {
-    print("Error: \(error.localizedDescription)")
+    print(error.localizedDescription)
 }
 ```
 
-## Models
-
-### `PostMetadata`
-
-The main result struct containing all post data.
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `id` | `String` | Post/tweet ID |
-| `url` | `String` | Full post URL |
-| `text` | `String` | Post text content |
-| `author` | `String` | Author's display name |
-| `authorHandle` | `String` | Author's handle (without @) |
-| `authorUrl` | `String` | Author's profile URL |
-| `language` | `String?` | Language code (e.g., "en") |
-| `likeCount` | `Int?` | Number of likes |
-| `formattedLikeCount` | `String?` | Likes with grouping separators |
-| `createdAt` | `Date?` | Creation date |
-| `formattedDate` | `String?` | Readable date string |
-| `hashtags` | `[String]` | Hashtags in the post |
-| `mentions` | `[String]` | User mentions (without @) |
-| `urls` | `[String]` | URLs in the post text |
-| `video` | `VideoInfo?` | Video metadata (if present) |
-| `photos` | `[PhotoInfo]` | Photos attached to the post |
-
-### `VideoInfo`
-
-Video-specific metadata (only present for video posts).
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `contentId` | `String` | X's internal video ID |
-| `durationMs` | `Int` | Duration in milliseconds |
-| `durationSeconds` | `Double` | Duration in seconds |
-| `formattedDuration` | `String` | Duration as `"M:SS"` or `"H:MM:SS"` |
-| `playbackUrl` | `String` | HLS `.m3u8` playback URL |
-| `viewCount` | `String?` | Pre-formatted view count (e.g., "91.1K") |
-| `shouldLoop` | `Bool` | Whether the video loops |
-| `variants` | `[VideoVariant]` | Available formats (MP4s at different bitrates, HLS) |
-| `bestMp4Url` | `URL?` | Highest-bitrate direct MP4 download URL |
-
-### `VideoVariant`
-
-A single video format variant.
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `url` | `String` | Direct URL to this variant |
-| `contentType` | `String` | MIME type (`"video/mp4"` or `"application/x-mpegURL"`) |
-| `bitrate` | `Int?` | Bitrate in bps (`nil` for HLS) |
-
-### `PhotoInfo`
-
-A photo attached to a post.
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `url` | `String` | Direct image URL |
-| `width` | `Int` | Width in pixels |
-| `height` | `Int` | Height in pixels |
-
 ## How It Works
 
-The library queries three public X endpoints and merges the results:
+`XMetadata.fetch(_:)` extracts the numeric post ID, then queries up to three public X endpoints and merges the results:
 
-1. **oembed** (`publish.twitter.com/oembed`) — author name, handle, post URL. No auth needed.
-2. **syndication** (`cdn.syndication.twimg.com/tweet-result`) — full text, like count, creation date, language, hashtags, mentions, media info, video MP4 variants, photo URLs. No auth needed.
-3. **video config** (`api.twitter.com/1.1/videos/tweet/config`) — video duration, view count, HLS playback URL. Uses a public guest token (fetched automatically).
+1. **oembed** (`publish.twitter.com/oembed`) — author display name, handle, profile URL, and an HTML embed from which post text can be extracted.
+2. **syndication** (`cdn.syndication.twimg.com/tweet-result`) — the richest source: full text, like and reply counts, view count, creation date, language, entities (hashtags, mentions, URLs), author identity, and media details including MP4 variants and photo URLs. A request token is derived from the post ID using X's own base-36 algorithm.
+3. **video config** (`api.twitter.com/1.1/videos/tweet/config`) — only called for video posts; supplies the HLS playback URL, precise duration, formatted view count, and loop setting, using an automatically-fetched guest token.
 
-The video config endpoint is only called when the syndication response indicates the post contains video. For text-only posts, only two requests are made.
+oembed and syndication are fetched in parallel. If both fail, the post is treated as missing.
 
-## Limitations
+## Models
 
-- **Rate limiting** — X may rate-limit requests from IPs making too many calls. Reduce frequency if you encounter `rateLimited` errors.
-- **No transcript/captions** — X video captions are burned into the video frames, not served as separate text tracks.
-- **Guest token** — The video config endpoint requires a guest token which is fetched automatically. These tokens expire, but a fresh one is obtained for each request.
-- **Endpoint stability** — These are unofficial endpoints that X may change at any time. Updates will be provided as needed.
+| Type | Kind | Description |
+|------|------|-------------|
+| `PostMetadata` | struct | Aggregated post data (see field table below) |
+| `VideoInfo` | struct | `contentId`, `durationMs`, `playbackUrl`, `viewCount`, `shouldLoop`, `variants`, plus `bestMp4Url`, `durationSeconds`, `formattedDuration` |
+| `VideoVariant` | struct | `url`, `contentType`, `bitrate` for a single MP4/HLS variant |
+| `PhotoInfo` | struct | `url`, `width`, `height` for an attached photo |
+| `PostID` | enum | URL/ID extraction utilities |
+| `XMetadataError` | enum | Typed errors with `errorDescription` |
+
+### PostMetadata fields
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | `String` | The post/tweet ID |
+| `url` | `String` | Canonical post URL |
+| `text` | `String` | Full post text |
+| `author` | `String` | Author display name |
+| `authorHandle` | `String` | Author handle (without `@`) |
+| `authorUrl` | `String` | Author profile URL |
+| `authorId` | `String?` | Author numeric user ID |
+| `authorVerified` | `Bool` | Whether the author is verified (blue or legacy) |
+| `authorProfileImageUrl` | `String?` | Author avatar URL (HTTPS) |
+| `language` | `String?` | Post language code (e.g. `"en"`) |
+| `likeCount` | `Int?` | Number of likes/favorites |
+| `replyCount` | `Int?` | Number of replies (conversation count) |
+| `viewCount` | `Int?` | Raw integer view count |
+| `createdAt` | `Date?` | When the post was created |
+| `hashtags` | `[String]` | Hashtags used (without `#`) |
+| `mentions` | `[String]` | Mentioned handles (without `@`) |
+| `urls` | `[String]` | Expanded URLs in the post |
+| `video` | `VideoInfo?` | Video metadata, if present |
+| `photos` | `[PhotoInfo]` | Attached photos |
+
+`PostMetadata` also provides computed `formattedLikeCount` and `formattedDate` helpers.
+
+## Use Cases
+
+- Link previews and embeds without the official X API
+- Archiving post text, engagement, and media
+- Downloading the highest-quality MP4 from video posts for transcription or backup
+- Building moderation or analytics tooling over public posts
 
 ## Testing
 
@@ -215,17 +174,7 @@ The video config endpoint is only called when the syndication response indicates
 swift test
 ```
 
-The test suite includes unit tests for ID extraction, formatting, and error handling, plus integration tests that hit X's live endpoints.
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass
-5. Submit a pull request
+The test suite exercises URL/ID extraction, the syndication token algorithm, and live metadata fetching across text, photo, and video posts.
 
 ## License
 
